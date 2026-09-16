@@ -26,6 +26,8 @@ Fastify and Prisma provide a small TypeScript backend with explicit schemas and 
 
 Session cookies were chosen over browser-stored bearer tokens. Session tokens are random and only their SHA-256 hashes are stored. The cookie is HttpOnly and SameSite strict; state-changing requests also require a CSRF header matching a separate cookie.
 
+Ticket authorization is centralized in `backend/src/domain/authorization.ts`. Administrators have full ticket access. Agents can access tickets they created or that are assigned to them, and can modify only tickets assigned to them. The same visibility predicate is applied to queue results, ticket detail, audit history, and dashboard aggregates to prevent read-side IDOR/BOLA leaks.
+
 ## Indexes and Performance
 
 Indexes cover status/deadline, priority/deadline, assignment/status, customer name, creation time, and audit history. The queue uses a parameterized SQL query because Prisma's ordinary `orderBy` cannot express the required dynamic overdue and enum-rank ordering in one portable query. The current queue query is intentionally readable; large deployments should benchmark it with `EXPLAIN ANALYZE` and add a search-specific index strategy if customer-name search volume requires it.
@@ -48,6 +50,6 @@ Unit tests cover queue ordering and pure escalation behavior. The API has been s
 
 The current implementation favors a simple scheduler process over introducing Redis or a job broker. PostgreSQL conditional updates provide the needed correctness for one scheduler family, but a larger deployment should add worker observability, distributed rate limiting, and explicit leader/lease management if scheduler volume grows.
 
-The current UI provides ticket creation and status changes; the API supports priority, deadline, and assignment updates, but a richer admin user-management and assignment control surface is still appropriate for a full operational rollout. Production also requires TLS, secret rotation, backups, monitoring, dependency review, and a formal threat model.
+The UI now provides ticket creation, status/priority/deadline changes, assignment, ticket detail, audit history, deletion confirmation, and priority/status breakdowns. A richer admin user-management surface is still appropriate for a full operational rollout. Production also requires TLS, secret rotation, backups, monitoring, dependency review, and a formal threat model.
 
 The final local `npm audit --omit=dev` check reported three high-severity advisories through Prisma's tooling dependency chain. npm's suggested remediation is a forced, breaking version change, so it was not applied blindly. This must be resolved and regression-tested as part of dependency maintenance before public production deployment.

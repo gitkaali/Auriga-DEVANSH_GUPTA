@@ -14,7 +14,17 @@ export async function escalateBreachedTickets(prisma: PrismaClient, now = new Da
   let escalated = 0;
   for (const candidate of candidates) {
     await prisma.$transaction(async (transaction) => {
-      const locked = await transaction.ticket.findUnique({ where: { id: candidate.id } });
+      const lockedRows = await transaction.$queryRaw<Array<{
+        id: number;
+        priority: 'NORMAL' | 'HIGH' | 'URGENT' | 'LOW';
+        status: TicketStatus;
+        promisedResponseAt: Date;
+      }>>(Prisma.sql`
+        SELECT id, priority, status, "promisedResponseAt"
+        FROM "Ticket"
+        WHERE id = ${candidate.id}
+        FOR UPDATE`);
+      const locked = lockedRows[0];
       if (!locked) return;
 
       const change = calculateEscalation({

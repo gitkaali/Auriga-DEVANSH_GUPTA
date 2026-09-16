@@ -10,6 +10,10 @@ const configSchema = z.object({
   NODE_ENV: z.enum(['development', 'test', 'production']).default('development'),
   CODESPACE_NAME: z.string().trim().min(1).optional(),
   GITHUB_CODESPACES_PORT_FORWARDING_DOMAIN: z.string().trim().min(1).default('app.github.dev'),
+}).superRefine((value, context) => {
+  if (value.NODE_ENV === 'production' && (value.SESSION_SECRET.includes('development') || value.SESSION_SECRET.length < 64)) {
+    context.addIssue({ code: 'custom', path: ['SESSION_SECRET'], message: 'Production SESSION_SECRET must be a random value of at least 64 characters' });
+  }
 });
 
 export const config = configSchema.parse(process.env);

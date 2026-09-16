@@ -8,9 +8,9 @@ A production-oriented generic helpdesk ticket management system focused on deter
 - Deterministic backend queue ordering with overdue tickets first
 - One-level-per-run automatic SLA escalation
 - PostgreSQL relational persistence with Prisma migrations
-- Admin and agent roles
+- Admin and agent roles with server-side ticket visibility boundaries
 - Secure HTTP-only sessions, Argon2id password hashing, CSRF validation, security headers, and rate limiting
-- Ticket CRUD, assignment fields, status/priority/deadline changes, search, filters, pagination, dashboard metrics, and audit history
+- Ticket CRUD, assignment fields, status/priority/deadline changes, search, filters, pagination, dashboard metrics, ticket detail, audit history, and admin deletion
 - Pure unit tests for queue and escalation rules
 
 ## Technology Stack
@@ -23,7 +23,7 @@ A production-oriented generic helpdesk ticket management system focused on deter
 
 ## Architecture
 
-The `backend` package owns authentication, authorization, validation, database access, queue ordering, audit history, and escalation. The `frontend` package only renders API results and submits user actions. A separate scheduler process calls the same escalation service as the API, so escalation does not depend on a browser being open.
+The `backend` package owns authentication, authorization, validation, database access, queue ordering, audit history, and escalation. The `frontend` package only renders API results and submits user actions. Agent queue, detail, audit, and dashboard data are filtered again on the server. A separate scheduler process calls the same escalation service as the API, so escalation does not depend on a browser being open.
 
 See [REASONING.md](REASONING.md) for the design decisions and tradeoffs.
 

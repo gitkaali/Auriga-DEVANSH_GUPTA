@@ -11,6 +11,7 @@ import { z } from 'zod';
 import { config } from './config.js';
 import { prisma } from './db.js';
 import { escalateBreachedTickets } from './services/escalation.js';
+import { canAccessTicket, canModifyTicket } from './domain/authorization.js';
 
 const ticketPriorities = ['URGENT', 'HIGH', 'NORMAL', 'LOW'] as const;
 const ticketStatuses = ['OPEN', 'PENDING', 'IN_PROGRESS', 'RESOLVED', 'CLOSED'] as const;
@@ -47,7 +48,7 @@ declare module 'fastify' {
 }
 
 function tokenHash(token: string): string {
-  return crypto.createHash('sha256').update(token).digest('hex');
+  return crypto.createHmac('sha256', config.SESSION_SECRET).update(token).digest('hex');
 }
 
 function csrfToken(): string {
@@ -75,10 +76,6 @@ function requireUser(request: AuthenticatedRequest, reply: FastifyReply): Sessio
     return undefined;
   }
   return request.user;
-}
-
-function canModifyTicket(user: SessionUser, assigneeId: number | null): boolean {
-  return user.role === Role.ADMIN || assigneeId === user.id;
 }
 
 async function auditTicketChange(
@@ -134,7 +131,7 @@ export async function buildApp(): Promise<FastifyInstance> {
     };
   });
 
-  app.post('/api/auth/register', async (request, reply) => {
+  app.post('/api/auth/register', { config: { rateLimit: { max: 5, timeWindow: '15 minutes' } } }, async (request, reply) => {
     const input = credentialsSchema.extend({ name: z.string().trim().min(1).max(100) }).parse(request.body);
     const count = await prisma.user.count();
     if (count > 0) return reply.conflict('Initial registration is closed');
@@ -143,7 +140,7 @@ export async function buildApp(): Promise<FastifyInstance> {
     return reply.code(201).send({ id: user.id, email: user.email, name: user.name, role: user.role });
   });
 
-  app.post('/api/auth/login', async (request, reply) => {
+  app.post('/api/auth/login', { config: { rateLimit: { max: 10, timeWindow: '15 minutes' } } }, async (request, reply) => {
     const input = credentialsSchema.parse(request.body);
     const user = await prisma.user.findUnique({ where: { email: input.email.toLowerCase() } });
     if (!user || !user.isActive || !(await argon2.verify(user.passwordHash, input.password))) return reply.unauthorized('Invalid credentials');
@@ -178,7 +175,10 @@ export async function buildApp(): Promise<FastifyInstance> {
     const user = requireUser(request, reply);
     if (!user) return;
     const query = listQuerySchema.parse(request.query);
-    const filters: Prisma.Sql[] = [Prisma.sql`t.status IN ('OPEN', 'PENDING', 'IN_PROGRESS')`];
+    const visibility = user.role === Role.ADMIN
+      ? Prisma.sql`TRUE`
+      : Prisma.sql`(t."assigneeId" = ${user.id} OR t."creatorId" = ${user.id})`;
+    const filters: Prisma.Sql[] = [visibility, Prisma.sql`t.status IN ('OPEN', 'PENDING', 'IN_PROGRESS')`];
     if (query.status) filters.push(Prisma.sql`t.status = CAST(${query.status} AS "TicketStatus")`);
     if (query.priority) filters.push(Prisma.sql`t.priority = CAST(${query.priority} AS "Priority")`);
     if (query.assigneeId) filters.push(Prisma.sql`t."assigneeId" = ${query.assigneeId}`);
@@ -232,6 +232,7 @@ export async function buildApp(): Promise<FastifyInstance> {
     const id = z.coerce.number().int().positive().parse((request.params as { id: string }).id);
     const ticket = await prisma.ticket.findUnique({ where: { id }, include: { assignee: { select: { id: true, name: true, email: true } } } });
     if (!ticket) return reply.notFound('Ticket not found');
+    if (!canAccessTicket(user.id, user.role, ticket)) return reply.notFound('Ticket not found');
     return ticket;
   });
 
@@ -242,7 +243,8 @@ export async function buildApp(): Promise<FastifyInstance> {
     const input = ticketUpdateSchema.parse(request.body);
     const existing = await prisma.ticket.findUnique({ where: { id } });
     if (!existing) return reply.notFound('Ticket not found');
-    if (!canModifyTicket(user, existing.assigneeId)) return reply.forbidden('Insufficient permission');
+    if (!canAccessTicket(user.id, user.role, existing)) return reply.notFound('Ticket not found');
+    if (!canModifyTicket(user.id, user.role, existing.assigneeId)) return reply.forbidden('Insufficient permission');
     if (input.assigneeId !== undefined && user.role !== Role.ADMIN) return reply.forbidden('Only admins can assign tickets');
     if (input.assigneeId) {
       const assignee = await prisma.user.findFirst({ where: { id: input.assigneeId, isActive: true } });
@@ -283,20 +285,23 @@ export async function buildApp(): Promise<FastifyInstance> {
     const user = requireUser(request, reply);
     if (!user) return;
     const id = z.coerce.number().int().positive().parse((request.params as { id: string }).id);
+    const existing = await prisma.ticket.findUnique({ where: { id }, select: { assigneeId: true, creatorId: true } });
+    if (!existing || !canAccessTicket(user.id, user.role, existing)) return reply.notFound('Ticket not found');
     return prisma.auditRecord.findMany({ where: { ticketId: id }, orderBy: { occurredAt: 'desc' }, select: { action: true, previousValue: true, newValue: true, actorType: true, occurredAt: true, actor: { select: { name: true } } } });
   });
 
   app.get('/api/dashboard', async (request, reply) => {
     const user = requireUser(request, reply);
     if (!user) return;
+    const visibility = user.role === Role.ADMIN ? {} : { OR: [{ assigneeId: user.id }, { creatorId: user.id }] };
     const [total, open, overdue, assigned, byPriority, byStatus, recentlyEscalated] = await Promise.all([
-      prisma.ticket.count(),
-      prisma.ticket.count({ where: { status: { in: activeStatuses } } }),
-      prisma.ticket.count({ where: { status: { in: activeStatuses }, promisedResponseAt: { lt: new Date() } } }),
+      prisma.ticket.count({ where: visibility }),
+      prisma.ticket.count({ where: { ...visibility, status: { in: activeStatuses } } }),
+      prisma.ticket.count({ where: { ...visibility, status: { in: activeStatuses }, promisedResponseAt: { lt: new Date() } } }),
       prisma.ticket.count({ where: { assigneeId: user.id, status: { in: activeStatuses } } }),
-      prisma.ticket.groupBy({ by: ['priority'], _count: { _all: true } }),
-      prisma.ticket.groupBy({ by: ['status'], _count: { _all: true } }),
-      prisma.auditRecord.findMany({ where: { action: { in: ['SLA_ESCALATION', 'PRIORITY_CHANGED'] } }, orderBy: { occurredAt: 'desc' }, take: 10, include: { ticket: { select: { id: true, title: true } } } }),
+      prisma.ticket.groupBy({ by: ['priority'], where: visibility, _count: { _all: true } }),
+      prisma.ticket.groupBy({ by: ['status'], where: visibility, _count: { _all: true } }),
+      prisma.auditRecord.findMany({ where: { action: { in: ['SLA_ESCALATION', 'PRIORITY_CHANGED'] }, ticket: visibility }, orderBy: { occurredAt: 'desc' }, take: 10, include: { ticket: { select: { id: true, title: true } } } }),
     ]);
     return { total, open, overdue, assigned, byPriority, byStatus, recentlyEscalated };
   });
