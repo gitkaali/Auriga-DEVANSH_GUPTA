@@ -1,0 +1,11 @@
+{
+  "name": "auriga-helpdesk",
+  "private": true,
+  "scripts": {
+    "dev:api": "npm --prefix backend run dev",
+    "dev:web": "npm --prefix frontend run dev -- --host 0.0.0.0",
+    "build": "npm --prefix backend run build && npm --prefix frontend run build",
+    "test": "npm --prefix backend test",
+    "lint": "npm --prefix backend run lint && npm --prefix frontend run lint"
+  }
+}
