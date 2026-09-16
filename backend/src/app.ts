@@ -30,6 +30,17 @@ const ticketCreateSchema = z.object({
   promisedResponseAt: z.coerce.date(),
 }).strict();
 const ticketUpdateSchema = ticketCreateSchema.partial().strict();
+const userCreateSchema = z.object({
+  name: z.string().trim().min(1).max(100),
+  email: z.string().trim().email().max(320),
+  password: z.string().min(12).max(200),
+  role: z.enum(['ADMIN', 'AGENT']).default('AGENT'),
+}).strict();
+const userUpdateSchema = z.object({
+  name: z.string().trim().min(1).max(100).optional(),
+  role: z.enum(['ADMIN', 'AGENT']).optional(),
+  isActive: z.boolean().optional(),
+}).strict();
 const listQuerySchema = z.object({
   page: z.coerce.number().int().min(1).default(1),
   pageSize: z.coerce.number().int().min(1).max(100).default(25),
@@ -169,6 +180,42 @@ export async function buildApp(): Promise<FastifyInstance> {
       orderBy: { name: 'asc' },
       select: { id: true, name: true, email: true, role: true },
     });
+  });
+
+  app.post('/api/users', async (request, reply) => {
+    const user = requireUser(request, reply);
+    if (!user) return;
+    if (user.role !== Role.ADMIN) return reply.forbidden('Only admins can create users');
+    const input = userCreateSchema.parse(request.body);
+    const created = await prisma.user.create({
+      data: { name: input.name, email: input.email.toLowerCase(), passwordHash: await argon2.hash(input.password), role: input.role },
+      select: { id: true, name: true, email: true, role: true, isActive: true },
+    });
+    return reply.code(201).send(created);
+  });
+
+  app.patch('/api/users/:id', async (request, reply) => {
+    const user = requireUser(request, reply);
+    if (!user) return;
+    if (user.role !== Role.ADMIN) return reply.forbidden('Only admins can update users');
+    const id = z.coerce.number().int().positive().parse((request.params as { id: string }).id);
+    const input = userUpdateSchema.parse(request.body);
+    if (id === user.id && input.isActive === false) return reply.badRequest('You cannot deactivate your own account');
+    const target = await prisma.user.findUnique({ where: { id }, select: { role: true, isActive: true } });
+    if (!target) return reply.notFound('User not found');
+    const removesAdmin = target.role === Role.ADMIN && target.isActive && (input.role === Role.AGENT || input.isActive === false);
+    if (removesAdmin && await prisma.user.count({ where: { role: Role.ADMIN, isActive: true } }) <= 1) return reply.badRequest('At least one active administrator is required');
+    const updateData: Prisma.UserUpdateInput = {};
+    if (input.name !== undefined) updateData.name = input.name;
+    if (input.role !== undefined) updateData.role = input.role;
+    if (input.isActive !== undefined) updateData.isActive = input.isActive;
+    const updated = await prisma.user.update({
+      where: { id },
+      data: updateData,
+      select: { id: true, name: true, email: true, role: true, isActive: true },
+    });
+    if (input.isActive === false) await prisma.session.updateMany({ where: { userId: id, revokedAt: null }, data: { revokedAt: new Date() } });
+    return updated;
   });
 
   app.get('/api/tickets', async (request, reply) => {
@@ -315,6 +362,7 @@ export async function buildApp(): Promise<FastifyInstance> {
 
   app.setErrorHandler((error, _request, reply) => {
     if (error instanceof z.ZodError) return reply.badRequest('Invalid request data');
+    if (error instanceof Prisma.PrismaClientKnownRequestError && error.code === 'P2002') return reply.conflict('A resource with that value already exists');
     if (error instanceof Prisma.PrismaClientKnownRequestError && error.code === 'P2025') return reply.notFound('Resource not found');
     const statusCode = error instanceof Error && 'statusCode' in error && typeof error.statusCode === 'number' ? error.statusCode : undefined;
     if (statusCode !== undefined && statusCode >= 400 && statusCode < 500) {

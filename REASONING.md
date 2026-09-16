@@ -39,16 +39,17 @@ Indexes cover status/deadline, priority/deadline, assignment/status, customer na
 - Urgent tickets do not escalate further.
 - A breached normal ticket never jumps directly to urgent.
 - Assignment can be cleared with `null`, while only administrators can change assignment.
+- The last active administrator cannot be deactivated or demoted.
 - Unknown IDs return safe not-found responses.
 - Invalid bodies and query values return safe validation errors.
 
 ## Testing Strategy
 
-Unit tests cover queue ordering and pure escalation behavior. The API has been smoke-tested against a real PostgreSQL migration, including authentication, CSRF-protected creation, and raw queue retrieval. Before public production deployment, add a disposable database integration suite, authorization matrix tests for every route, and Playwright coverage for login, filtering, pagination, destructive actions, and responsive queue behavior.
+Unit tests cover queue ordering, pure escalation behavior, and authorization policy. PostgreSQL-backed integration tests cover authentication, CSRF enforcement, agent visibility, assigned-ticket access, and IDOR prevention. Before public production deployment, add broader authorization matrix coverage for every route and Playwright coverage for login, filtering, pagination, destructive actions, and responsive queue behavior.
 
 ## Tradeoffs and Remaining Limitations
 
-The current implementation favors a simple scheduler process over introducing Redis or a job broker. PostgreSQL conditional updates provide the needed correctness for one scheduler family, but a larger deployment should add worker observability, distributed rate limiting, and explicit leader/lease management if scheduler volume grows.
+The current implementation favors a simple scheduler process over introducing Redis or a job broker. PostgreSQL row locks and conditional updates provide correctness for concurrent scheduler instances, but a larger deployment should add worker observability, distributed rate limiting, and explicit leader/lease management if scheduler volume grows. Admin user creation and activation/role management are exposed through protected API routes; production should add an audited administrative UI workflow if operators need to manage users frequently.
 
 The UI now provides ticket creation, status/priority/deadline changes, assignment, ticket detail, audit history, deletion confirmation, and priority/status breakdowns. A richer admin user-management surface is still appropriate for a full operational rollout. Production also requires TLS, secret rotation, backups, monitoring, dependency review, and a formal threat model.
 

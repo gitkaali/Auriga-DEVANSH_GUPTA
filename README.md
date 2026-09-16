@@ -96,12 +96,13 @@ npm run build
 npm run lint
 ```
 
-The current automated tests cover queue tie-breakers, overdue behavior, status exclusions, one-level escalation, non-breached tickets, terminal priorities, and duplicate candidates in one run. The API smoke path can be tested with the health endpoint and the registration/create/list flow described above.
+The automated tests cover queue tie-breakers, overdue behavior, status exclusions, one-level escalation, non-breached tickets, terminal priorities, duplicate candidates in one run, authentication, CSRF enforcement, agent visibility, assigned-ticket access, and IDOR prevention. Integration tests use the local PostgreSQL database and clean up their test records.
 
 ## API Overview
 
 - `POST /api/auth/register` - first administrator bootstrap only
 - `POST /api/auth/login`, `POST /api/auth/logout`, `GET /api/auth/me`
+- `GET /api/users`, `POST /api/users`, `PATCH /api/users/:id` - admin-only user management
 - `GET /api/tickets` - server-side search, filters, deterministic ordering, and pagination
 - `POST /api/tickets`, `GET /api/tickets/:id`, `PATCH /api/tickets/:id`, `DELETE /api/tickets/:id`
 - `GET /api/tickets/:id/audit`
@@ -133,7 +134,7 @@ For each run, breached active `NORMAL` tickets become `HIGH`, and breached activ
 
 Inputs are validated with Zod, queries use Prisma or parameterized SQL, writable ticket fields are explicit, output is rendered through React escaping, CORS is allowlisted, security headers are enabled, and authentication is rate-limited. Passwords, session tokens, and secrets are not written to audit records or logs. This application is not claimed to be 100% secure.
 
-Remaining limitations are documented in [REASONING.md](REASONING.md), including the need for deployment-level TLS, a managed rate-limit strategy for multiple API replicas, operational secret rotation, and expanded browser/security integration coverage before public production launch.
+Remaining limitations are documented in [REASONING.md](REASONING.md), including the need for deployment-level TLS, a managed rate-limit strategy for multiple API replicas, operational secret rotation, load testing, and expanded browser/security integration coverage before public production launch.
 
 ## Deployment
 
